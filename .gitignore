@@ -5,5 +5,7 @@
 .LSOverride
 __pycache__/
 .tool-versions
+
 .venv
+.vscode
 real_data
