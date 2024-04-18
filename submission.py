@@ -15,10 +15,8 @@ clean_df should be used to clean (preprocess) the data.
 run.py can be used to test your submission.
 """
 
-# List your libraries and modules here. Don't forget to update environment.yml!
-import pandas as pd
-from sklearn.linear_model import LogisticRegression
 import joblib
+import pandas as pd
 
 
 def clean_df(df, background_df=None):
@@ -44,8 +42,8 @@ def clean_df(df, background_df=None):
     # Selecting variables for modelling
     keepcols = [
         "nomem_encr",  # ID variable required for predictions,
-        "age"          # newly created variable
-    ] 
+        "age",  # newly created variable
+    ]
 
     # Keeping data with variables selected
     df = df[keepcols]

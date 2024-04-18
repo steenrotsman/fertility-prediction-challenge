@@ -15,10 +15,10 @@ The predictions need to be in a separate file with two columns (nomem_encr, pred
 
 """
 
-import sys
 import argparse
+import sys
+
 import pandas as pd
-import submission
 
 parser = argparse.ArgumentParser(description="Score data.")
 # Score subcommand
