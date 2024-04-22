@@ -15,13 +15,11 @@ clean_df should be used to clean (preprocess) the data.
 run.py can be used to test your submission.
 """
 
-from os.path import join
-
 import joblib
 import pandas as pd
 
-CODEBOOK_PATH = join("PreFer", "codebooks", "PreFer_codebook.csv")
-KWARGS = {"encoding": "latin-1", "encoding_errors": "replace", "low_memory": False}
+from metadata import categorical_bg, categorical_data, numeric_bg, numeric_data
+
 SURVEYS = ["cf", "ca", "cd", "ci", "ch", "cp", "gr", "cv", "he", "ma", "cr", "cs", "cw"]
 WAVES = [f"{x:02}{chr(x+89)}" for x in range(8, 21)]
 
@@ -38,19 +36,6 @@ def clean_df(df, background_df=None):
     Returns:
     pd.DataFrame: The cleaned dataframe with only the necessary columns and processed variables.
     """
-    codebook = pd.read_csv(CODEBOOK_PATH, **KWARGS)
-
-    # Load metadata
-    meta = codebook[codebook["dataset"] == "PreFer_train_data.csv"]
-    meta_bg = codebook[
-        (codebook["dataset"] == "PreFer_train_background_data.csv")
-        | (codebook["var_name"] == "nomem_encr")
-    ]
-    categorical_data = meta[meta["type_var"] == "categorical"]["var_name"].tolist()
-    categorical_bg = meta_bg[meta_bg["type_var"] == "categorical"]["var_name"].tolist()
-    numeric_data = meta[meta["type_var"] == "numeric"]["var_name"].tolist()
-    numeric_bg = meta_bg[meta_bg["type_var"] == "numeric"]["var_name"].tolist()
-
     # Keep onnly categorical and numeric columns
     df = df[categorical_data + numeric_data]
     background_df = background_df[categorical_bg + numeric_bg]
