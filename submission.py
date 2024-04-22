@@ -15,8 +15,15 @@ clean_df should be used to clean (preprocess) the data.
 run.py can be used to test your submission.
 """
 
+from os.path import join
+
 import joblib
 import pandas as pd
+
+CODEBOOK_PATH = join("PreFer", "codebooks", "PreFer_codebook.csv")
+KWARGS = {"encoding": "latin-1", "encoding_errors": "replace", "low_memory": False}
+SURVEYS = ["cf", "ca", "cd", "ci", "ch", "cp", "gr", "cv", "he", "ma", "cr", "cs", "cw"]
+WAVES = [f"{x:02}{chr(x+89)}" for x in range(8, 21)]
 
 
 def clean_df(df, background_df=None):
@@ -31,24 +38,52 @@ def clean_df(df, background_df=None):
     Returns:
     pd.DataFrame: The cleaned dataframe with only the necessary columns and processed variables.
     """
+    codebook = pd.read_csv(CODEBOOK_PATH, **KWARGS)
 
-    ## This script contains a bare minimum working example
-    # Create new variable with age
-    df["age"] = 2024 - df["birthyear_bg"]
-
-    # Imputing missing values in age with the mean
-    df["age"] = df["age"].fillna(df["age"].mean())
-
-    # Selecting variables for modelling
-    keepcols = [
-        "nomem_encr",  # ID variable required for predictions,
-        "age",  # newly created variable
+    # Load metadata
+    meta = codebook[codebook["dataset"] == "PreFer_train_data.csv"]
+    meta_bg = codebook[
+        (codebook["dataset"] == "PreFer_train_background_data.csv")
+        | (codebook["var_name"] == "nomem_encr")
     ]
+    categorical_data = meta[meta["type_var"] == "categorical"]["var_name"].tolist()
+    categorical_bg = meta_bg[meta_bg["type_var"] == "categorical"]["var_name"].tolist()
+    numeric_data = meta[meta["type_var"] == "numeric"]["var_name"].tolist()
+    numeric_bg = meta_bg[meta_bg["type_var"] == "numeric"]["var_name"].tolist()
 
-    # Keeping data with variables selected
-    df = df[keepcols]
+    # Keep onnly categorical and numeric columns
+    df = df[categorical_data + numeric_data]
+    background_df = background_df[categorical_bg + numeric_bg]
 
-    return df
+    # Pivot waves wide to long
+    df_long = df.melt(
+        "nomem_encr", [f"cf{wave}_m" for wave in WAVES], "wavecode", "wave"
+    )
+    df_long = df_long.dropna()
+    df_long["wavecode"] = df_long["wavecode"].str.extract(r"(\d\d\w)")
+    df_long["wave"] = df_long["wave"].astype("int")
+
+    # Add background info
+    df_long = pd.merge(df_long, background_df, how="left", on=["nomem_encr", "wave"])
+
+    # Pivot wave-specific variables wide to long
+    for code in SURVEYS:
+        # Question code xxx leaves room for 1000 questions
+        for i in range(1000):
+            value_vars = [
+                c for c in df.columns if c[:2] == code and c[-3:] == f"{i:03}"
+            ]
+            if value_vars:
+                tmp = df.melt("nomem_encr", value_vars, "wavecode", f"{code}{i:03}")
+                tmp["wavecode"] = tmp["wavecode"].str.extract(r"(\d\d\w)")
+                df_long = pd.merge(
+                    df_long, tmp, how="left", on=["nomem_encr", "wavecode"]
+                )
+
+    # Impute NAs with -1
+    df_long.fillna(-1)
+
+    return df_long
 
 
 def predict_outcomes(df, background_df=None, model_path="model.joblib"):
@@ -83,14 +118,25 @@ def predict_outcomes(df, background_df=None, model_path="model.joblib"):
     df = clean_df(df, background_df)
 
     # Exclude the variable nomem_encr if this variable is NOT in your model
-    vars_without_id = df.columns[df.columns != 'nomem_encr']
+    vars_without_id = df.drop(
+        ["nomem_encr", "wavecode", "wave", "nohouse_encr"], axis=1
+    )
 
-    # Generate predictions from model, should be 0 (no child) or 1 (had child)
-    predictions = model.predict(df[vars_without_id])
+    # Generate probability predictions that individual had a child
+    predictions = model.predict_proba(vars_without_id)[:, 1]
 
     # Output file should be DataFrame with two columns, nomem_encr and predictions
     df_predict = pd.DataFrame(
         {"nomem_encr": df["nomem_encr"], "prediction": predictions}
+    )
+
+    # Combine predictions for individual
+    df_predict = (
+        df_predict.groupby("nomem_encr")["prediction"]
+        .prod()
+        .round()
+        .astype(int)
+        .reset_index()
     )
 
     # Return only dataset with predictions and identifier
