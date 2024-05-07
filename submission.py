@@ -18,11 +18,6 @@ run.py can be used to test your submission.
 import joblib
 import pandas as pd
 
-from metadata import categorical_bg, categorical_data, numeric_bg, numeric_data
-
-SURVEYS = ["cf", "ca", "cd", "ci", "ch", "cp", "gr", "cv", "he", "ma", "cr", "cs", "cw"]
-WAVES = [f"{x:02}{chr(x+89)}" for x in range(8, 21)]
-
 
 def clean_df(df, background_df=None):
     """
@@ -36,39 +31,13 @@ def clean_df(df, background_df=None):
     Returns:
     pd.DataFrame: The cleaned dataframe with only the necessary columns and processed variables.
     """
-    # Keep onnly categorical and numeric columns
-    df = df[categorical_data + numeric_data]
-    background_df = background_df[categorical_bg + numeric_bg]
-
-    # Pivot waves wide to long
-    df_long = df.melt(
-        "nomem_encr", [f"cf{wave}_m" for wave in WAVES], "wavecode", "wave"
+    max_waves = background_df.groupby("nomem_encr")["wave"].max().reset_index()
+    return (
+        df.merge(max_waves, on="nomem_encr")
+        .merge(background_df, on=["nomem_encr", "wave"])
+        .dropna(axis=1, thresh=len(df) * 0.4)
+        .fillna(-1)
     )
-    df_long = df_long.dropna()
-    df_long["wavecode"] = df_long["wavecode"].str.extract(r"(\d\d\w)")
-    df_long["wave"] = df_long["wave"].astype("int")
-
-    # Add background info
-    df_long = pd.merge(df_long, background_df, how="left", on=["nomem_encr", "wave"])
-
-    # Pivot wave-specific variables wide to long
-    for code in SURVEYS:
-        # Question code xxx leaves room for 1000 questions
-        for i in range(1000):
-            value_vars = [
-                c for c in df.columns if c[:2] == code and c[-3:] == f"{i:03}"
-            ]
-            if value_vars:
-                tmp = df.melt("nomem_encr", value_vars, "wavecode", f"{code}{i:03}")
-                tmp["wavecode"] = tmp["wavecode"].str.extract(r"(\d\d\w)")
-                df_long = pd.merge(
-                    df_long, tmp, how="left", on=["nomem_encr", "wavecode"]
-                )
-
-    # Impute NAs with -1
-    df_long.fillna(-1)
-
-    return df_long
 
 
 def predict_outcomes(df, background_df=None, model_path="model.joblib"):
@@ -103,9 +72,7 @@ def predict_outcomes(df, background_df=None, model_path="model.joblib"):
     df = clean_df(df, background_df)
 
     # Exclude the variable nomem_encr if this variable is NOT in your model
-    vars_without_id = df.drop(
-        ["nomem_encr", "wavecode", "wave", "nohouse_encr"], axis=1
-    )
+    vars_without_id = df.drop(["nomem_encr", "wave", "nohouse_encr"], axis=1)
 
     # Generate probability predictions that individual had a child
     predictions = model.predict_proba(vars_without_id)[:, 1]

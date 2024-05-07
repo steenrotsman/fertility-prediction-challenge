@@ -13,10 +13,12 @@ import argparse
 import joblib
 import pandas as pd
 from lightgbm import LGBMClassifier
-from sklearn.metrics import f1_score
+from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 
-from submission import KWARGS, clean_df
+from submission import clean_df
+
+KWARGS = {"encoding": "latin-1", "encoding_errors": "replace", "low_memory": False}
 
 parser = argparse.ArgumentParser(description="Train model.")
 parser.add_argument("data_path", help="Path to data CSV file.")
@@ -28,7 +30,7 @@ args = parser.parse_args()
 def main():
     df = pd.read_csv(args.data_path, **KWARGS)
     bg = pd.read_csv(args.background_data_path, **KWARGS)
-    gt = pd.read_csv(args.ground_truth_path)
+    gt = pd.read_csv(args.ground_truth_path, **KWARGS)
 
     data = clean_df(df, bg)
     train_save_model(data, gt)
@@ -49,9 +51,7 @@ def train_save_model(cleaned_df, outcome_df):
     model_df = model_df[~model_df["new_child"].isna()]
 
     # Split into X and y
-    X = model_df.drop(
-        ["nomem_encr", "new_child", "wavecode", "wave", "nohouse_encr"], axis=1
-    )
+    X = model_df.drop(["nomem_encr", "new_child", "wave", "nohouse_encr"], axis=1)
     y = model_df["new_child"]
 
     # Classifier model
@@ -61,16 +61,17 @@ def train_save_model(cleaned_df, outcome_df):
 
     # Get estimate of score
     X1, X2, y1, y2 = train_test_split(X, y, test_size=0.5, stratify=y, random_state=123)
+    estimate(X1, X2, y1, y2)
+    estimate(X2, X1, y2, y1)
 
+
+def estimate(X1, X2, y1, y2):
+    model = LGBMClassifier(verbose=-1, random_seed=123)
     model.fit(X1, y1)
     y_pred = model.predict(X2)
     print(f1_score(y2, y_pred))
-
-    model.fit(X2, y2)
-    y_pred = model.predict(X1)
-    print(f1_score(y1, y_pred))
-    # 0.7675988428158148
-    # 0.7977422389463782
+    print(roc_auc_score(y2, model.predict_proba(X2)[:, 1]))
+    print(confusion_matrix(y2, y_pred))
 
 
 if __name__ == "__main__":
