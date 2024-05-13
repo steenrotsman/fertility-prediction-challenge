@@ -13,7 +13,7 @@ import argparse
 import joblib
 import pandas as pd
 from lightgbm import LGBMClassifier
-from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score
+from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 
 from submission import clean_df
@@ -61,17 +61,17 @@ def train_save_model(cleaned_df, outcome_df):
 
     # Get estimate of score
     X1, X2, y1, y2 = train_test_split(X, y, test_size=0.5, stratify=y, random_state=123)
-    estimate(X1, X2, y1, y2)
-    estimate(X2, X1, y2, y1)
+    for thresh in range(0, 100, 10):
+        f11 = estimate(X1, X2, y1, y2, thresh / 100)
+        f12 = estimate(X2, X1, y2, y1, thresh / 100)
+        print(f"{thresh / 100}: {(f11 + f12) / 2:.3f}")
 
 
-def estimate(X1, X2, y1, y2):
+def estimate(X1, X2, y1, y2, thresh=0.5):
     model = LGBMClassifier(verbose=-1, random_seed=123)
     model.fit(X1, y1)
-    y_pred = model.predict(X2)
-    print(f1_score(y2, y_pred))
-    print(roc_auc_score(y2, model.predict_proba(X2)[:, 1]))
-    print(confusion_matrix(y2, y_pred))
+    y_pred = (model.predict_proba(X2)[:, 1] > thresh).astype(int)
+    return f1_score(y2, y_pred)
 
 
 if __name__ == "__main__":

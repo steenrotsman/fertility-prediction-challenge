@@ -18,6 +18,8 @@ run.py can be used to test your submission.
 import joblib
 import pandas as pd
 
+THRESHOLD = 0.1
+
 
 def clean_df(df, background_df=None):
     """
@@ -83,13 +85,7 @@ def predict_outcomes(df, background_df=None, model_path="model.joblib"):
     )
 
     # Combine predictions for individual
-    df_predict = (
-        df_predict.groupby("nomem_encr")["prediction"]
-        .prod()
-        .round()
-        .astype(int)
-        .reset_index()
-    )
+    df_predict = (df_predict["prediction"] > THRESHOLD).astype(int)
 
     # Return only dataset with predictions and identifier
     return df_predict
