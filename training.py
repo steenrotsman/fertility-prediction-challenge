@@ -11,14 +11,13 @@ number of folds, model, et cetera
 import argparse
 
 import joblib
+import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
 from sklearn.metrics import f1_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit
 
-from submission import clean_df
-
-KWARGS = {"encoding": "latin-1", "encoding_errors": "replace", "low_memory": False}
+from submission import DROP_COLS, KWARGS, clean_df
 
 parser = argparse.ArgumentParser(description="Train model.")
 parser.add_argument("data_path", help="Path to data CSV file.")
@@ -51,7 +50,7 @@ def train_save_model(cleaned_df, outcome_df):
     model_df = model_df[~model_df["new_child"].isna()]
 
     # Split into X and y
-    X = model_df.drop(["nomem_encr", "new_child", "wave", "nohouse_encr"], axis=1)
+    X = model_df.drop(DROP_COLS + ["new_child"], axis=1)
     y = model_df["new_child"]
 
     # Classifier model
@@ -59,19 +58,41 @@ def train_save_model(cleaned_df, outcome_df):
     model.fit(X, y)
     joblib.dump(model, "model.joblib")
 
-    # Get estimate of score
-    X1, X2, y1, y2 = train_test_split(X, y, test_size=0.5, stratify=y, random_state=123)
-    for thresh in range(0, 100, 10):
-        f11 = estimate(X1, X2, y1, y2, thresh / 100)
-        f12 = estimate(X2, X1, y2, y1, thresh / 100)
-        print(f"{thresh / 100}: {(f11 + f12) / 2:.3f}")
+    # Tune classification threshold
+    np.set_printoptions(linewidth=400)
+    rng = np.random.default_rng(123)
+    folds = 100
+    f1s = [[] for i in range(folds)]
+    for i in range(folds):
+        state = rng.integers(0, 1000)
+        df1, df2 = stratified_group_split(model_df, "nohouse_encr", y, 0.2, state)
+        X1 = df1.drop(DROP_COLS + ["new_child"], axis=1)
+        X2 = df2.drop(DROP_COLS + ["new_child"], axis=1)
+        y1 = df1["new_child"]
+        y2 = df2["new_child"]
+
+        model = LGBMClassifier(verbose=-1, random_seed=123)
+        model.fit(X1, y1)
+
+        for thresh in range(0, 51, 1):
+            y_pred = (model.predict_proba(X2)[:, 1] > thresh / 100).astype(int)
+            f1 = f1_score(y2, y_pred)
+            f1s[i].append(round(f1, 3))
+    f1s = np.array(f1s)
+    print(f1s.mean(axis=0).round(3))
+    print(f1s.std(axis=0).round(3))
+    print(np.argmax(f1s.mean(axis=0)))
 
 
-def estimate(X1, X2, y1, y2, thresh=0.5):
-    model = LGBMClassifier(verbose=-1, random_seed=123)
-    model.fit(X1, y1)
-    y_pred = (model.predict_proba(X2)[:, 1] > thresh).astype(int)
-    return f1_score(y2, y_pred)
+def stratified_group_split(df, group_col, stratify, test_size=0.5, random_state=None):
+    gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
+    groups = df[group_col].values
+    train_idx, test_idx = next(gss.split(df, groups=groups, y=stratify))
+
+    train_df = df.iloc[train_idx].reset_index(drop=True)
+    test_df = df.iloc[test_idx].reset_index(drop=True)
+
+    return train_df, test_df
 
 
 if __name__ == "__main__":

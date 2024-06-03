@@ -17,8 +17,11 @@ run.py can be used to test your submission.
 
 import joblib
 import pandas as pd
+from scipy.stats import linregress
 
-THRESHOLD = 0.1
+THRESHOLD = 0.28
+DROP_COLS = ["nomem_encr", "wave", "nohouse_encr", "outcome_available"]
+KWARGS = {"encoding": "latin-1", "encoding_errors": "replace", "low_memory": False}
 
 
 def clean_df(df, background_df=None):
@@ -33,14 +36,89 @@ def clean_df(df, background_df=None):
     Returns:
     pd.DataFrame: The cleaned dataframe with only the necessary columns and processed variables.
     """
-    max_waves = background_df.groupby("nomem_encr")["wave"].max().reset_index()
-    clean = (
-        df.merge(max_waves, on="nomem_encr")
-        .merge(background_df, on=["nomem_encr", "wave"])
-        .fillna(-1)
-    )
+    df = drop_irrelevant_cols(df)
+    df = join_background(df, background_df)
+    df = add_cols(df)
 
-    return clean[cols]
+    return df
+
+
+def drop_irrelevant_cols(df):
+    drop_waves = ["08a", "09b", "10c", "11d", "12e", "13f", "14g", "15h", "16i"]
+    old_waves = [c for c in df.columns for wave in drop_waves if wave in c]
+    fieldwork_period = ["cf17j_m", "cf18k_m", "cf19l_m", "cf20m_m"]
+    datetime_string = df.select_dtypes(include=["object"]).columns.tolist()
+    fake_df = pd.read_csv("PreFer_fake_data.csv", **KWARGS)
+    datetime_string += fake_df.select_dtypes(include=["object"]).columns.tolist()
+    df = df.drop(old_waves + fieldwork_period + datetime_string, axis=1)
+
+    return df
+
+
+def join_background(df, bg):
+    max_waves = bg.groupby("nomem_encr")["wave"].max().reset_index()
+    return df.merge(max_waves, on="nomem_encr").merge(bg, on=["nomem_encr", "wave"])
+
+
+def add_cols(df):
+    for num in ("130", "128", "029"):
+        df[f"cf{num}"] = df[f"cf20m{num}"]
+        for wave in ("19l", "18k", "17j"):
+            df.loc[df[f"cf{num}"].isna(), f"cf{num}"] = df.loc[
+                df[f"cf{num}"].isna(), f"cf{wave}{num}"
+            ]
+    waves = ("20m", "19l", "18k", "17j")
+    df["cf031"] = df[[f"cf{wave}031" for wave in waves]].max(axis=1)
+    df["cf456"] = df[[f"cf{wave}456" for wave in waves]].max(axis=1)
+    df["birthyear_last_child"] = df[
+        [f"cf{wave}{num}" for wave in waves for num in range(456, 471)]
+    ].max(axis=1)
+
+    n_respondents = df.groupby("nohouse_encr").count()["nomem_encr"].reset_index()
+    n_respondents["n_respondents"] = n_respondents["nomem_encr"]
+    n_respondents = n_respondents[["nohouse_encr", "n_respondents"]]
+    df = pd.merge(df, n_respondents, on="nohouse_encr")
+
+    vars = (
+        "woning",
+        "sted",
+        "woonvorm",
+        "partner",
+        "oplzon",
+        "oplmet",
+        "burgstat",
+        "belbezig",
+    )
+    for var in vars:
+        unique = (
+            pd.melt(
+                df,
+                id_vars="nomem_encr",
+                value_vars=[f"{var}_{year}" for year in range(2017, 2021)],
+            )
+            .groupby("nomem_encr")
+            .value.nunique()
+            .reset_index()[["nomem_encr", "value"]]
+            .rename(columns={"value": f"{var}_unique"})
+        )
+    df = pd.merge(df, unique, on="nomem_encr")
+
+    var = "nettohh_f"
+    nettohh = pd.melt(
+        df,
+        id_vars="nomem_encr",
+        value_vars=[f"{var}_{year}" for year in range(2017, 2021)],
+    ).dropna()
+    nettohh["variable"] = nettohh.variable.str.replace("nettohh_f_", "").astype("int64")
+    slope = (
+        nettohh.groupby("nomem_encr")
+        .apply(lambda v: linregress(v.variable, v.value)[0])
+        .reset_index()
+        .rename({0: "nettohh_f_slope"}, axis=1)
+    )
+    df = pd.merge(df, slope, on="nomem_encr", how="outer")
+
+    return df
 
 
 def predict_outcomes(df, background_df=None, model_path="model.joblib"):
@@ -75,7 +153,7 @@ def predict_outcomes(df, background_df=None, model_path="model.joblib"):
     df = clean_df(df, background_df)
 
     # Exclude the variable nomem_encr if this variable is NOT in your model
-    vars_without_id = df.drop(["nomem_encr", "wave", "nohouse_encr"], axis=1)
+    vars_without_id = df.drop(DROP_COLS, axis=1)
 
     # Generate probability predictions that individual had a child
     predictions = model.predict_proba(vars_without_id)[:, 1]
@@ -90,209 +168,3 @@ def predict_outcomes(df, background_df=None, model_path="model.joblib"):
 
     # Return only dataset with predictions and identifier
     return df_predict
-
-
-cols = [
-    "nomem_encr",
-    "outcome_available",
-    "birthyear_bg",
-    "gender_bg",
-    "migration_background_bg",
-    "age_bg",
-    "belbezig_2008",
-    "belbezig_2009",
-    "belbezig_2010",
-    "belbezig_2011",
-    "belbezig_2012",
-    "belbezig_2013",
-    "belbezig_2014",
-    "belbezig_2015",
-    "belbezig_2016",
-    "belbezig_2017",
-    "belbezig_2018",
-    "belbezig_2019",
-    "belbezig_2020",
-    "brutohh_f_2009",
-    "brutohh_f_2010",
-    "brutohh_f_2011",
-    "brutohh_f_2014",
-    "brutohh_f_2015",
-    "brutohh_f_2017",
-    "brutohh_f_2018",
-    "brutoink_f_2008",
-    "brutoink_f_2009",
-    "brutoink_f_2010",
-    "brutoink_f_2011",
-    "brutoink_f_2012",
-    "brutoink_f_2013",
-    "brutoink_f_2014",
-    "brutoink_f_2015",
-    "brutoink_f_2017",
-    "brutoink_f_2018",
-    "brutoink_f_2020",
-    "burgstat_2008",
-    "burgstat_2009",
-    "burgstat_2010",
-    "burgstat_2011",
-    "burgstat_2012",
-    "burgstat_2013",
-    "burgstat_2014",
-    "burgstat_2015",
-    "burgstat_2016",
-    "burgstat_2017",
-    "burgstat_2018",
-    "burgstat_2019",
-    "burgstat_2020",
-    "nettohh_f_2009",
-    "nettohh_f_2010",
-    "nettohh_f_2011",
-    "nettohh_f_2014",
-    "nettohh_f_2015",
-    "nettohh_f_2017",
-    "nettohh_f_2018",
-    "nettoink_2008",
-    "nettoink_2009",
-    "nettoink_2010",
-    "nettoink_2011",
-    "nettoink_2012",
-    "nettoink_2013",
-    "nettoink_2014",
-    "nettoink_2015",
-    "nettoink_2017",
-    "nettoink_2018",
-    "nettoink_2020",
-    "nettoink_f_2008",
-    "nettoink_f_2009",
-    "nettoink_f_2010",
-    "nettoink_f_2011",
-    "nettoink_f_2012",
-    "nettoink_f_2013",
-    "nettoink_f_2014",
-    "nettoink_f_2015",
-    "nettoink_f_2017",
-    "nettoink_f_2018",
-    "nettoink_f_2020",
-    "oplcat_2008",
-    "oplcat_2009",
-    "oplcat_2010",
-    "oplcat_2011",
-    "oplcat_2012",
-    "oplcat_2013",
-    "oplcat_2014",
-    "oplcat_2015",
-    "oplcat_2016",
-    "oplcat_2017",
-    "oplcat_2018",
-    "oplcat_2019",
-    "oplcat_2020",
-    "oplmet_2008",
-    "oplmet_2009",
-    "oplmet_2010",
-    "oplmet_2011",
-    "oplmet_2012",
-    "oplmet_2013",
-    "oplmet_2014",
-    "oplmet_2015",
-    "oplmet_2016",
-    "oplmet_2017",
-    "oplmet_2018",
-    "oplmet_2019",
-    "oplmet_2020",
-    "oplzon_2008",
-    "oplzon_2009",
-    "oplzon_2010",
-    "oplzon_2011",
-    "oplzon_2012",
-    "oplzon_2013",
-    "oplzon_2014",
-    "oplzon_2015",
-    "oplzon_2016",
-    "oplzon_2017",
-    "oplzon_2018",
-    "oplzon_2019",
-    "oplzon_2020",
-    "partner_2008",
-    "partner_2009",
-    "partner_2010",
-    "partner_2011",
-    "partner_2012",
-    "partner_2013",
-    "partner_2014",
-    "partner_2015",
-    "partner_2016",
-    "partner_2017",
-    "partner_2018",
-    "partner_2019",
-    "partner_2020",
-    "sted_2008",
-    "sted_2009",
-    "sted_2010",
-    "sted_2011",
-    "sted_2012",
-    "sted_2013",
-    "sted_2014",
-    "sted_2015",
-    "sted_2016",
-    "sted_2017",
-    "sted_2018",
-    "sted_2019",
-    "sted_2020",
-    "woning_2008",
-    "woning_2009",
-    "woning_2010",
-    "woning_2011",
-    "woning_2012",
-    "woning_2013",
-    "woning_2014",
-    "woning_2015",
-    "woning_2016",
-    "woning_2017",
-    "woning_2018",
-    "woning_2019",
-    "woning_2020",
-    "woonvorm_2008",
-    "woonvorm_2009",
-    "woonvorm_2010",
-    "woonvorm_2011",
-    "woonvorm_2012",
-    "woonvorm_2013",
-    "woonvorm_2014",
-    "woonvorm_2015",
-    "woonvorm_2016",
-    "woonvorm_2017",
-    "woonvorm_2018",
-    "woonvorm_2019",
-    "woonvorm_2020",
-    "wave",
-    "nohouse_encr",
-    "positie",
-    "lftdcat",
-    "lftdhhh",
-    "aantalhh",
-    "aantalki",
-    "partner",
-    "burgstat",
-    "woonvorm",
-    "woning",
-    "belbezig",
-    "brutoink",
-    "nettoink",
-    "brutocat",
-    "nettocat",
-    "oplzon",
-    "oplmet",
-    "oplcat",
-    "doetmee",
-    "sted",
-    "simpc",
-    "brutoink_f",
-    "netinc",
-    "nettoink_f",
-    "brutohh_f",
-    "nettohh_f",
-    "werving",
-    "age_imp",
-    "birthyear_imp",
-    "gender_imp",
-    "migration_background_imp",
-]
